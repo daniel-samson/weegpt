@@ -1,6 +1,10 @@
-# WeeGPT
-
-A tiny educational transformer built from scratch to understand the GPT architecture.
+<p align="center">
+  <img src="assets/mascot.jpg" alt="WeeGPT mascot" width="128" />
+  <br />
+  <strong>WeeGPT</strong>
+  <br />
+  A built a Wee Generative Pre-trained Transformer from scratch to understand the GPT architecture.
+</p>
 
 ## Setup
 
