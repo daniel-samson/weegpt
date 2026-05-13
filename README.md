@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/mascot.jpg" alt="WeeGPT mascot" width="128" />
+  <img src="assets/mascot.jpg?v=2" alt="WeeGPT mascot" width="128" />
   <br />
   <strong>WeeGPT</strong>
   <br />
