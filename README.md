@@ -3,7 +3,7 @@
   <br />
   <strong>WeeGPT</strong>
   <br />
-  A built a Wee Generative Pre-trained Transformer from scratch to understand the GPT architecture.
+  I built a Wee Generative Pre-trained Transformer from scratch to understand the GPT architecture.
 </p>
 
 ## Setup
