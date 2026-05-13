@@ -22,9 +22,10 @@ python main.py
 
 ## TUI Commands
 
+Type `/` to open the command palette, then filter or select a command.
+
 - `/help` — list available commands
-- `/quit` — exit the application
+- `/exit` — exit the application
 - `/clear` — clear the log view
-- `Tab` — switch between views
-- `Ctrl+C` — quit
+- `/view log|inspector` — switch views
 - `Up arrow` — recall previous commands

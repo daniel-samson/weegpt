@@ -5,10 +5,9 @@ from typing import Protocol, runtime_checkable
 
 from textual import on
 from textual.app import App, ComposeResult
-from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, RichLog, Static
+from textual.containers import Vertical
+from textual.widgets import Header, Input, OptionList, RichLog, Static
+from textual.widgets.option_list import Option
 
 
 # ---------------------------------------------------------------------------
@@ -78,8 +77,8 @@ async def cmd_help(app: WeeGPTApp, args: str) -> None:
         log.write(f"  [cyan]{name}[/] — {cmd.help or 'no description'}")
 
 
-@command("/quit", help="Exit the application")
-async def cmd_quit(app: WeeGPTApp, args: str) -> None:
+@command("/exit", help="Exit the application")
+async def cmd_exit(app: WeeGPTApp, args: str) -> None:
     app.exit()
 
 
@@ -128,8 +127,12 @@ class InspectorView(Vertical):
 
 class WeeGPTApp(App):
     CSS = """
-    Screen {
-        layout: vertical;
+    #view-label {
+        height: 1;
+        padding: 0 1;
+        background: $accent;
+        color: $text;
+        text-style: bold;
     }
 
     #view-container {
@@ -153,28 +156,30 @@ class WeeGPTApp(App):
         color: $text-muted;
     }
 
-    #prompt {
-        dock: bottom;
-        margin: 0 0;
+    #prompt-area {
+        height: auto;
+        max-height: 14;
     }
 
-    #view-label {
-        dock: top;
-        height: 1;
-        padding: 0 1;
-        background: $accent;
-        color: $text;
-        text-style: bold;
+    #command-palette {
+        height: auto;
+        max-height: 10;
+        display: none;
+        border: solid $accent;
+        padding: 0;
+    }
+
+    #command-palette.visible {
+        display: block;
+    }
+
+    #prompt {
+        height: 3;
     }
     """
 
     TITLE = "WeeGPT"
     SUB_TITLE = "tiny transformer playground"
-
-    BINDINGS = [
-        Binding("ctrl+c", "quit", "Quit", show=True, priority=True),
-        Binding("tab", "switch_view", "Switch view", show=True),
-    ]
 
     def __init__(self, backend: Backend | None = None) -> None:
         super().__init__()
@@ -192,12 +197,13 @@ class WeeGPTApp(App):
         yield Static("view: log", id="view-label")
         with Vertical(id="view-container"):
             yield LogView()
-        yield Input(placeholder="Type a command (/help) or message…", id="prompt")
-        yield Footer()
+        with Vertical(id="prompt-area"):
+            yield OptionList(id="command-palette")
+            yield Input(placeholder="Type / for commands, or enter a message…", id="prompt")
 
     def on_mount(self) -> None:
         log = self.query_one("#log", RichLog)
-        log.write("[bold green]WeeGPT[/] ready. Type [cyan]/help[/] for commands.")
+        log.write("[bold green]WeeGPT[/] ready. Type [cyan]/[/] to see commands.")
         self.query_one("#prompt", Input).focus()
 
     # -- view switching -------------------------------------------------------
@@ -218,12 +224,54 @@ class WeeGPTApp(App):
         next_name = names[(idx + 1) % len(names)]
         self.activate_view(next_name)
 
+    # -- command palette ------------------------------------------------------
+
+    def _update_palette(self, filter_text: str) -> None:
+        palette = self.query_one("#command-palette", OptionList)
+        query = filter_text.lstrip("/").lower()
+        matches = [
+            (name, cmd.help)
+            for name, cmd in sorted(_commands.items())
+            if query in name.lower() or query in (cmd.help or "").lower()
+        ]
+        palette.clear_options()
+        if matches:
+            for name, help_text in matches:
+                palette.add_option(Option(f"{name}  [dim]{help_text}[/]", id=name))
+            palette.add_class("visible")
+            palette.highlighted = 0
+        else:
+            palette.remove_class("visible")
+
+    def _hide_palette(self) -> None:
+        palette = self.query_one("#command-palette", OptionList)
+        palette.remove_class("visible")
+        palette.clear_options()
+
+    @on(Input.Changed, "#prompt")
+    def on_prompt_changed(self, event: Input.Changed) -> None:
+        text = event.value
+        if text.startswith("/") and not text.endswith("\n"):
+            self._update_palette(text)
+        else:
+            self._hide_palette()
+
+    @on(OptionList.OptionSelected, "#command-palette")
+    async def on_palette_selected(self, event: OptionList.OptionSelected) -> None:
+        cmd_name = event.option.id
+        prompt = self.query_one("#prompt", Input)
+        prompt.value = cmd_name + " "
+        prompt.cursor_position = len(prompt.value)
+        self._hide_palette()
+        prompt.focus()
+
     # -- input handling -------------------------------------------------------
 
     @on(Input.Submitted, "#prompt")
     async def on_prompt_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         event.input.clear()
+        self._hide_palette()
         if not text:
             return
 
@@ -249,29 +297,53 @@ class WeeGPTApp(App):
             response = self.backend.handle_input(text)
             log.write(response)
 
-    # -- command history via up/down arrow ------------------------------------
+    # -- keyboard navigation --------------------------------------------------
 
     def on_key(self, event) -> None:
         prompt = self.query_one("#prompt", Input)
-        if not prompt.has_focus:
+        palette = self.query_one("#command-palette", OptionList)
+        palette_visible = palette.has_class("visible")
+
+        if not prompt.has_focus and not palette.has_focus:
             return
 
-        if event.key == "up":
-            if self._command_history:
-                if self._history_index == -1:
-                    self._history_index = len(self._command_history) - 1
-                elif self._history_index > 0:
-                    self._history_index -= 1
-                prompt.value = self._command_history[self._history_index]
-                prompt.cursor_position = len(prompt.value)
+        if event.key == "escape" and palette_visible:
+            self._hide_palette()
+            prompt.focus()
             event.prevent_default()
-        elif event.key == "down":
-            if self._history_index != -1:
-                if self._history_index < len(self._command_history) - 1:
-                    self._history_index += 1
+            return
+
+        if palette_visible and event.key in ("up", "down"):
+            palette.focus()
+            return
+
+        if palette_visible and event.key == "enter" and palette.has_focus:
+            if palette.highlighted is not None:
+                option = palette.get_option_at_index(palette.highlighted)
+                prompt.value = option.id + " "
+                prompt.cursor_position = len(prompt.value)
+                self._hide_palette()
+                prompt.focus()
+                event.prevent_default()
+            return
+
+        if prompt.has_focus and not palette_visible:
+            if event.key == "up":
+                if self._command_history:
+                    if self._history_index == -1:
+                        self._history_index = len(self._command_history) - 1
+                    elif self._history_index > 0:
+                        self._history_index -= 1
                     prompt.value = self._command_history[self._history_index]
-                else:
-                    self._history_index = -1
-                    prompt.value = ""
-                prompt.cursor_position = len(prompt.value)
-            event.prevent_default()
+                    prompt.cursor_position = len(prompt.value)
+                event.prevent_default()
+            elif event.key == "down":
+                if self._history_index != -1:
+                    if self._history_index < len(self._command_history) - 1:
+                        self._history_index += 1
+                        prompt.value = self._command_history[self._history_index]
+                    else:
+                        self._history_index = -1
+                        prompt.value = ""
+                    prompt.cursor_position = len(prompt.value)
+                event.prevent_default()
