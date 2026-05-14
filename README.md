@@ -35,15 +35,22 @@ Commands can also declare their own argument autocomplete (e.g. `/view ` shows `
 
 ### Argument autocomplete
 
-Pass a `complete` callable to `@command` to suggest values for arguments:
+Pass an `args` tree to `@command` to describe valid argument positions:
 
 ```python
-from tui import command, static_args
+from tui import command, choices
 
-@command("/load", help="Load a checkpoint", complete=static_args("latest", "best"))
-async def cmd_load(app, args):
-    ...
+@command("/view", args=choices("log", "inspector"))           # /view log | /view inspector
+@command("/echo", args=...)                                   # free-form, no autocomplete
+@command("/foo",  args={"init": choices("default", "fresh"),  # /foo init default | /foo init fresh
+                        "save": None,                          # /foo save (done)
+                        "load": ...})                          # /foo load <anything>
 ```
 
-The callable receives `(partial, prior_args)` and returns a list of full suggestions.
+Each node in the tree is one of:
+
+- `None` — terminal, palette stops after this position
+- `dict` — fixed choices; each key maps to the next node
+- `...` (Ellipsis) — free-form from here
+- a callable `(partial, prior_args) -> list[str]` — dynamic suggestions
 

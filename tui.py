@@ -33,7 +33,20 @@ class StubBackend:
 # Command registry
 # ---------------------------------------------------------------------------
 
-ArgCompleter = Callable[[str, list[str]], list[str]]
+# An ``ArgsNode`` describes what can appear at one argument position.
+#
+#   None       — terminal: no more autocomplete, command is "done".
+#   Ellipsis   — free-form from here: user types anything, palette stays closed.
+#   dict       — fixed choices; each key maps to the next ``ArgsNode``.
+#   callable   — ``(partial, prior_args) -> list[str] | ArgsNode``; returns
+#                suggestions for the current position, or another node to
+#                descend into.
+ArgsNode = object
+
+
+def choices(*opts: str) -> dict[str, None]:
+    """Shorthand for a level of terminal choices: ``choices("a", "b")``."""
+    return {opt: None for opt in opts}
 
 
 @dataclass
@@ -41,9 +54,7 @@ class Command:
     name: str
     help: str
     handler: object  # callable(app, args) -> None
-    # Optional callable(partial, prior_args) -> list[str] of suggestions for
-    # the argument under the cursor.
-    complete: ArgCompleter | None = None
+    args: ArgsNode = None
 
     async def __call__(self, app: WeeGPTApp, args: str) -> None:
         result = self.handler(app, args)
@@ -54,34 +65,23 @@ class Command:
 _commands: dict[str, Command] = {}
 
 
-def command(name: str, *, help: str = "", complete: ArgCompleter | None = None):
+def command(name: str, *, help: str = "", args: ArgsNode = None):
     """Decorator to register a slash command.
 
-    Usage:
-        @command("/step", help="Step through one forward pass")
-        async def cmd_step(app, args):
-            ...
+    ``args`` is a tree describing valid argument positions. Use ``choices(...)``
+    for a flat list, nest ``dict``s for multi-step args, ``...`` (Ellipsis)
+    for free-form input, and ``None`` (the default) for commands that take no
+    arguments::
 
-    For argument completion, pass a ``complete`` callable that receives the
-    partial token under the cursor and the list of prior arguments, and
-    returns the list of full suggestions::
-
-        @command("/view", help="...", complete=lambda p, prior: ["log", "inspector"])
-        async def cmd_view(app, args):
-            ...
+        @command("/view", args=choices("log", "inspector"))
+        @command("/load", args={"latest": None, "best": None})
+        @command("/echo", args=...)
+        @command("/exit")  # no args
     """
     def decorator(fn):
-        _commands[name] = Command(name=name, help=help, handler=fn, complete=complete)
+        _commands[name] = Command(name=name, help=help, handler=fn, args=args)
         return fn
     return decorator
-
-
-def static_args(*choices: str) -> ArgCompleter:
-    """Return a completer that suggests from a fixed list."""
-    def completer(partial: str, prior: list[str]) -> list[str]:
-        p = partial.lower()
-        return [c for c in choices if c.lower().startswith(p)]
-    return completer
 
 
 def get_commands() -> dict[str, Command]:
@@ -113,7 +113,7 @@ async def cmd_clear(app: WeeGPTApp, args: str) -> None:
 @command(
     "/view",
     help="Switch view: /view log | /view inspector",
-    complete=static_args("log", "inspector"),
+    args=choices("log", "inspector"),
 )
 async def cmd_view(app: WeeGPTApp, args: str) -> None:
     name = args.strip().lower()
@@ -283,13 +283,11 @@ class WeeGPTApp(App):
         if i == 0 and text.startswith("/"):
             return ("command", 0, text[1:cursor])
 
-        # Argument mode: cursor is past the command name in a "/cmd ..." input
-        # and the command has a registered completer.
+        # Argument mode: cursor is past the command name in a "/cmd ..." input.
         if text.startswith("/") and i > 0:
             head = text.split(maxsplit=1)[0].lower()
             cmd = _commands.get(head)
-            if cmd is not None and cmd.complete is not None:
-                # Prior args are the tokens between the command and this one.
+            if cmd is not None and cmd.args is not None:
                 before = text[len(head):i].split()
                 return ("arg", i, token, head, before)
 
@@ -390,18 +388,55 @@ class WeeGPTApp(App):
         self._token_end = prompt.cursor_position
         palette.add_class("visible")
 
+    @staticmethod
+    def _walk_args(node: ArgsNode, prior: list[str]) -> ArgsNode:
+        """Walk the args tree consuming ``prior`` tokens, return the node at
+        the cursor position. Returns ``None`` when args are exhausted, or
+        ``...`` when the remaining position is free-form."""
+        for arg in prior:
+            if node is None or node is Ellipsis:
+                return node
+            if callable(node):
+                try:
+                    node = node(arg, prior)
+                except Exception:
+                    return None
+            if isinstance(node, dict):
+                if arg in node:
+                    node = node[arg]
+                else:
+                    # Unknown token: treat the rest of the line as free-form.
+                    return Ellipsis
+            else:
+                return None
+        return node
+
     def _show_arg_options(self, cmd_name: str, partial: str, prior: list[str]) -> bool:
         palette = self.query_one("#command-palette", OptionList)
         cmd = _commands.get(cmd_name)
-        if cmd is None or cmd.complete is None:
+        if cmd is None or cmd.args is None:
             return False
-        try:
-            suggestions = list(cmd.complete(partial, prior))
-        except Exception:
+
+        node = self._walk_args(cmd.args, prior)
+        if node is None or node is Ellipsis:
             return False
-        palette.clear_options()
+
+        suggestions: list[str] = []
+        if isinstance(node, dict):
+            p = partial.lower()
+            suggestions = sorted(k for k in node if k.lower().startswith(p))
+        elif callable(node):
+            try:
+                result = node(partial, prior)
+            except Exception:
+                return False
+            if isinstance(result, (list, tuple)):
+                p = partial.lower()
+                suggestions = [s for s in result if s.lower().startswith(p)]
+
         if not suggestions:
             return False
+        palette.clear_options()
         for value in suggestions:
             palette.add_option(Option(f"[cyan]·[/] {value}", id=value))
         palette.highlighted = 0
