@@ -349,6 +349,8 @@ class WeeGPTApp(App):
 
     def _apply_selection(self, value: str) -> None:
         """Replace the active token in the input with ``value``."""
+        if self._palette_mode is None:
+            return
         prompt = self.query_one("#prompt", Input)
         text = prompt.value
         if self._palette_mode == "command":
@@ -452,12 +454,8 @@ class WeeGPTApp(App):
             palette.focus()
             return
 
-        if palette_visible and event.key == "enter" and palette.has_focus:
-            if palette.highlighted is not None:
-                option = palette.get_option_at_index(palette.highlighted)
-                self._apply_selection(option.id)
-                event.prevent_default()
-            return
+        # Enter while the palette has focus is handled by OptionList itself,
+        # which emits OptionSelected — see on_palette_option_selected.
 
         if prompt.has_focus and not palette_visible:
             if event.key == "up":
