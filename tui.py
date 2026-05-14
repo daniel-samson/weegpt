@@ -4,9 +4,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
 
+from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
+from textual.reactive import reactive
 from textual.widgets import Header, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
@@ -111,6 +113,24 @@ async def cmd_clear(app: WeeGPTApp, args: str) -> None:
 
 
 @command(
+    "/throbber",
+    help="Show/update highland cow throbber. No arg hides it.",
+    args=...,
+)
+async def cmd_throbber(app: WeeGPTApp, args: str) -> None:
+    throbber = app.query_one("#throbber", HighlandCow)
+    message = args.strip()
+    if not message:
+        throbber.remove_class("visible")
+        throbber.stop()
+        throbber.message = ""
+        return
+    throbber.message = message
+    throbber.add_class("visible")
+    throbber.start()
+
+
+@command(
     "/view",
     help="Switch view: /view log | /view inspector",
     args=choices("log", "inspector"),
@@ -124,6 +144,84 @@ async def cmd_view(app: WeeGPTApp, args: str) -> None:
     else:
         log = app.query_one("#log", RichLog)
         log.write(f"[red]Unknown view:[/] {name}. Use 'log' or 'inspector'.")
+
+
+# ---------------------------------------------------------------------------
+# Highland cow throbber
+# ---------------------------------------------------------------------------
+
+class HighlandCow(Static):
+    """A small animated highland cow with sliding warm colors.
+
+    Use as a throbber: instantiate, mount it somewhere, and update
+    ``message`` to change the text shown next to the cow. Call
+    :meth:`start` and :meth:`stop` to control the animation.
+    """
+
+    DEFAULT_CSS = """
+    HighlandCow {
+        height: 1;
+        width: auto;
+        padding: 0 1;
+    }
+    """
+
+    # The cow's face cycles through these "frames" — eyes shifting, blinking.
+    FRAMES: tuple[str, ...] = (
+        "ʕ◕ᴥ◕ʔ",
+        "ʕ•ᴥ•ʔ",
+        "ʕ◔ᴥ◔ʔ",
+        "ʕ•ᴥ•ʔ",
+        "ʕ-ᴥ-ʔ",
+        "ʕ•ᴥ•ʔ",
+    )
+
+    # Warm highland-cow palette — gingers, browns, tan.
+    PALETTE: tuple[str, ...] = (
+        "#a0522d", "#b8651e", "#cd853f", "#d4a574",
+        "#cd853f", "#b8651e", "#a0522d", "#8b4513",
+    )
+
+    INTERVAL = 0.12  # seconds between ticks
+    FRAME_TICKS = 4  # how many color ticks per face frame
+
+    message: reactive[str] = reactive("")
+
+    def __init__(self, message: str = "", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.message = message
+        self._tick = 0
+        self._timer = None
+
+    def on_mount(self) -> None:
+        self.start()
+
+    def start(self) -> None:
+        if self._timer is None:
+            self._timer = self.set_interval(self.INTERVAL, self._on_tick)
+
+    def stop(self) -> None:
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+
+    def _on_tick(self) -> None:
+        self._tick = (self._tick + 1) % 10_000
+        self.refresh()
+
+    def watch_message(self, _: str) -> None:
+        self.refresh()
+
+    def render(self) -> Text:
+        frame = self.FRAMES[(self._tick // self.FRAME_TICKS) % len(self.FRAMES)]
+        out = Text()
+        for i, ch in enumerate(frame):
+            color = self.PALETTE[(self._tick + i) % len(self.PALETTE)]
+            out.append(ch, style=color)
+        if self.message:
+            out.append("  ")
+            out.append(self.message, style="bold")
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +281,14 @@ class WeeGPTApp(App):
         color: $text-muted;
     }
 
+    #throbber {
+        display: none;
+    }
+
+    #throbber.visible {
+        display: block;
+    }
+
     #prompt-area {
         height: auto;
         max-height: 14;
@@ -228,6 +334,7 @@ class WeeGPTApp(App):
         yield Static("view: log", id="view-label")
         with Vertical(id="view-container"):
             yield LogView()
+        yield HighlandCow(id="throbber")
         with Vertical(id="prompt-area"):
             yield OptionList(id="command-palette")
             yield Input(

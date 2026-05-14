@@ -31,6 +31,7 @@ Commands can also declare their own argument autocomplete (e.g. `/view ` shows `
 - `/exit` — exit the application
 - `/clear` — clear the log view
 - `/view log|inspector` — switch views
+- `/throbber <message>` — show/update the highland cow throbber (no arg hides it)
 - `Up arrow` — recall previous commands
 
 ### Argument autocomplete
