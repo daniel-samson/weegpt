@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 
 from textual import on
 from textual.app import App, ComposeResult
@@ -33,11 +33,17 @@ class StubBackend:
 # Command registry
 # ---------------------------------------------------------------------------
 
+ArgCompleter = Callable[[str, list[str]], list[str]]
+
+
 @dataclass
 class Command:
     name: str
     help: str
     handler: object  # callable(app, args) -> None
+    # Optional callable(partial, prior_args) -> list[str] of suggestions for
+    # the argument under the cursor.
+    complete: ArgCompleter | None = None
 
     async def __call__(self, app: WeeGPTApp, args: str) -> None:
         result = self.handler(app, args)
@@ -48,18 +54,34 @@ class Command:
 _commands: dict[str, Command] = {}
 
 
-def command(name: str, *, help: str = ""):
+def command(name: str, *, help: str = "", complete: ArgCompleter | None = None):
     """Decorator to register a slash command.
 
     Usage:
         @command("/step", help="Step through one forward pass")
         async def cmd_step(app, args):
             ...
+
+    For argument completion, pass a ``complete`` callable that receives the
+    partial token under the cursor and the list of prior arguments, and
+    returns the list of full suggestions::
+
+        @command("/view", help="...", complete=lambda p, prior: ["log", "inspector"])
+        async def cmd_view(app, args):
+            ...
     """
     def decorator(fn):
-        _commands[name] = Command(name=name, help=help, handler=fn)
+        _commands[name] = Command(name=name, help=help, handler=fn, complete=complete)
         return fn
     return decorator
+
+
+def static_args(*choices: str) -> ArgCompleter:
+    """Return a completer that suggests from a fixed list."""
+    def completer(partial: str, prior: list[str]) -> list[str]:
+        p = partial.lower()
+        return [c for c in choices if c.lower().startswith(p)]
+    return completer
 
 
 def get_commands() -> dict[str, Command]:
@@ -88,7 +110,11 @@ async def cmd_clear(app: WeeGPTApp, args: str) -> None:
     app.query_one("#log", RichLog).clear()
 
 
-@command("/view", help="Switch view: /view log | /view inspector")
+@command(
+    "/view",
+    help="Switch view: /view log | /view inspector",
+    complete=static_args("log", "inspector"),
+)
 async def cmd_view(app: WeeGPTApp, args: str) -> None:
     name = args.strip().lower()
     if name == "log":
@@ -204,7 +230,11 @@ class WeeGPTApp(App):
             yield LogView()
         with Vertical(id="prompt-area"):
             yield OptionList(id="command-palette")
-            yield Input(placeholder="Type / for commands, @ for files, or enter a message…", id="prompt")
+            yield Input(
+                placeholder="Type / for commands, @ for files, or enter a message…",
+                id="prompt",
+                select_on_focus=False,
+            )
 
     def on_mount(self) -> None:
         log = self.query_one("#log", RichLog)
@@ -231,12 +261,14 @@ class WeeGPTApp(App):
 
     # -- palette (commands and file refs) -------------------------------------
 
-    def _detect_trigger(self, text: str, cursor: int) -> tuple[str, int, str] | None:
-        """Return (mode, trigger_index, partial) for the token under the cursor.
+    def _detect_trigger(self, text: str, cursor: int):
+        """Return a trigger descriptor for the token under the cursor.
 
-        Mode is "command" if the input starts with "/" and the cursor is in the
-        first whitespace-delimited token, or "file" if the cursor is inside a
-        whitespace-delimited token that starts with "@".
+        Returns a tuple shaped like one of:
+            ("command", token_start, partial)
+            ("file",    token_start, partial)
+            ("arg",     token_start, partial, command_name, prior_args)
+        or None when no palette should be shown.
         """
         # Walk back from cursor to the start of the current token.
         i = cursor
@@ -247,9 +279,19 @@ class WeeGPTApp(App):
         if token.startswith("@"):
             return ("file", i, token[1:])
 
-        # Command mode: only when "/" is at the very start of the input.
+        # Command mode: "/" at position 0 and cursor still in the command name.
         if i == 0 and text.startswith("/"):
             return ("command", 0, text[1:cursor])
+
+        # Argument mode: cursor is past the command name in a "/cmd ..." input
+        # and the command has a registered completer.
+        if text.startswith("/") and i > 0:
+            head = text.split(maxsplit=1)[0].lower()
+            cmd = _commands.get(head)
+            if cmd is not None and cmd.complete is not None:
+                # Prior args are the tokens between the command and this one.
+                before = text[len(head):i].split()
+                return ("arg", i, token, head, before)
 
         return None
 
@@ -326,12 +368,19 @@ class WeeGPTApp(App):
             self._hide_palette()
             return
 
-        mode, start, partial = trigger
-        shown = (
-            self._show_command_options(partial)
-            if mode == "command"
-            else self._show_file_options(partial)
-        )
+        mode = trigger[0]
+        start = trigger[1]
+        partial = trigger[2]
+
+        if mode == "command":
+            shown = self._show_command_options(partial)
+        elif mode == "file":
+            shown = self._show_file_options(partial)
+        else:  # arg
+            cmd_name = trigger[3]
+            prior = trigger[4]
+            shown = self._show_arg_options(cmd_name, partial, prior)
+
         if not shown:
             self._hide_palette()
             return
@@ -340,6 +389,23 @@ class WeeGPTApp(App):
         self._token_start = start
         self._token_end = prompt.cursor_position
         palette.add_class("visible")
+
+    def _show_arg_options(self, cmd_name: str, partial: str, prior: list[str]) -> bool:
+        palette = self.query_one("#command-palette", OptionList)
+        cmd = _commands.get(cmd_name)
+        if cmd is None or cmd.complete is None:
+            return False
+        try:
+            suggestions = list(cmd.complete(partial, prior))
+        except Exception:
+            return False
+        palette.clear_options()
+        if not suggestions:
+            return False
+        for value in suggestions:
+            palette.add_option(Option(f"[cyan]·[/] {value}", id=value))
+        palette.highlighted = 0
+        return True
 
     def _hide_palette(self) -> None:
         palette = self.query_one("#command-palette", OptionList)
@@ -353,12 +419,14 @@ class WeeGPTApp(App):
             return
         prompt = self.query_one("#prompt", Input)
         text = prompt.value
-        if self._palette_mode == "command":
+        mode = self._palette_mode
+
+        if mode == "command":
             # value already includes the leading "/" (e.g. "/view")
             new_text = value + " " + text[self._token_end:]
             new_cursor = len(value) + 1
-        else:
-            # file mode — preserve "@" prefix; append "/" if value was a dir,
+        elif mode == "file":
+            # preserve "@" prefix; append "/" if value is a dir,
             # otherwise a trailing space to move on to the next arg.
             is_dir = value.endswith("/")
             suffix = "" if is_dir else " "
@@ -370,10 +438,23 @@ class WeeGPTApp(App):
                 + text[self._token_end:]
             )
             new_cursor = self._token_start + 1 + len(value) + len(suffix)
+        else:  # arg
+            new_text = (
+                text[: self._token_start]
+                + value
+                + " "
+                + text[self._token_end:]
+            )
+            new_cursor = self._token_start + len(value) + 1
+
         prompt.value = new_text
         prompt.cursor_position = new_cursor
-        if self._palette_mode == "file" and value.endswith("/"):
-            # Re-open palette inside the new directory.
+        # Collapse any selection that the input may have created.
+        try:
+            prompt.selection = type(prompt.selection)(new_cursor, new_cursor)
+        except Exception:
+            pass
+        if mode == "file" and value.endswith("/"):
             self._update_palette()
         else:
             self._hide_palette()
