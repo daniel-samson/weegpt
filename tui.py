@@ -151,30 +151,34 @@ async def cmd_view(app: WeeGPTApp, args: str) -> None:
 # ---------------------------------------------------------------------------
 
 class HighlandCow(Static):
-    """A small animated highland cow with sliding warm colors.
+    """An ASCII-art highland cow throbber with sliding warm colors.
 
-    Use as a throbber: instantiate, mount it somewhere, and update
-    ``message`` to change the text shown next to the cow. Call
-    :meth:`start` and :meth:`stop` to control the animation.
+    The eyes blink every few seconds and a warm ginger/brown gradient
+    slides across every non-whitespace character. Update ``message`` to
+    change the text shown next to the cow's face. Call :meth:`start`
+    and :meth:`stop` to control the animation timer.
     """
 
     DEFAULT_CSS = """
     HighlandCow {
-        height: 1;
+        height: auto;
         width: auto;
         padding: 0 1;
     }
     """
 
-    # The cow's face cycles through these "frames" — eyes shifting, blinking.
-    FRAMES: tuple[str, ...] = (
-        "ʕ◕ᴥ◕ʔ",
-        "ʕ•ᴥ•ʔ",
-        "ʕ◔ᴥ◔ʔ",
-        "ʕ•ᴥ•ʔ",
-        "ʕ-ᴥ-ʔ",
-        "ʕ•ᴥ•ʔ",
+    # The cow's body, drawn as lines. {eyes} is substituted per-frame.
+    _LINES: tuple[str, ...] = (
+        r"         (__)",
+        r"         {eyes}",
+        r"  /-------\/",
+        r" / |     ||",
+        r"*  ||----||",
+        r"   ~~    ~~",
     )
+    _EYES_OPEN = "(oo)"
+    _EYES_CLOSED = "(--)"
+    _MESSAGE_LINE = 1  # which body line to append the message to
 
     # Warm highland-cow palette — gingers, browns, tan.
     PALETTE: tuple[str, ...] = (
@@ -182,8 +186,9 @@ class HighlandCow(Static):
         "#cd853f", "#b8651e", "#a0522d", "#8b4513",
     )
 
-    INTERVAL = 0.12  # seconds between ticks
-    FRAME_TICKS = 4  # how many color ticks per face frame
+    INTERVAL = 0.12       # seconds between ticks
+    BLINK_PERIOD = 24     # ticks between blinks (~3s at 0.12s)
+    BLINK_DURATION = 2    # ticks the eyes stay closed
 
     message: reactive[str] = reactive("")
 
@@ -213,14 +218,25 @@ class HighlandCow(Static):
         self.refresh()
 
     def render(self) -> Text:
-        frame = self.FRAMES[(self._tick // self.FRAME_TICKS) % len(self.FRAMES)]
+        blink = (self._tick % self.BLINK_PERIOD) < self.BLINK_DURATION
+        eyes = self._EYES_CLOSED if blink else self._EYES_OPEN
+
         out = Text()
-        for i, ch in enumerate(frame):
-            color = self.PALETTE[(self._tick + i) % len(self.PALETTE)]
-            out.append(ch, style=color)
-        if self.message:
-            out.append("  ")
-            out.append(self.message, style="bold")
+        char_index = 0
+        for line_i, template in enumerate(self._LINES):
+            line = template.format(eyes=eyes)
+            for ch in line:
+                if ch.isspace():
+                    out.append(ch)
+                else:
+                    color = self.PALETTE[(self._tick + char_index) % len(self.PALETTE)]
+                    out.append(ch, style=color)
+                    char_index += 1
+            if line_i == self._MESSAGE_LINE and self.message:
+                out.append("  ")
+                out.append(self.message, style="bold")
+            if line_i < len(self._LINES) - 1:
+                out.append("\n")
         return out
 
 
