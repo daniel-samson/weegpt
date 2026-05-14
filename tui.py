@@ -397,32 +397,14 @@ class WeeGPTApp(App):
         palette = self.query_one("#command-palette", OptionList)
         palette_visible = palette.has_class("visible")
 
-        # If the file palette is open, treat Enter as "pick the highlighted
-        # file" and stay in the input — the user may have more args to type.
-        if (
-            palette_visible
-            and self._palette_mode == "file"
-            and palette.highlighted is not None
-        ):
+        # When the palette is open, Enter just autocompletes — it never
+        # executes. The user presses Enter a second time to run.
+        if palette_visible and palette.highlighted is not None:
             option = palette.get_option_at_index(palette.highlighted)
             self._apply_selection(option.id)
             return
 
         text = event.value.strip()
-
-        # If the command palette is open and the typed command isn't an exact
-        # match, expand the highlighted entry (e.g. "/ex" -> "/exit").
-        if (
-            palette_visible
-            and self._palette_mode == "command"
-            and palette.highlighted is not None
-            and text.startswith("/")
-        ):
-            head, _, rest = text.partition(" ")
-            if head.lower() not in _commands:
-                option = palette.get_option_at_index(palette.highlighted)
-                text = option.id + (" " + rest if rest else "")
-
         event.input.clear()
         self._hide_palette()
         if not text:
