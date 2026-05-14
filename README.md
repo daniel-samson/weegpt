@@ -23,6 +23,8 @@ python main.py
 ## TUI Commands
 
 Type `/` to open the command palette, then filter or select a command.
+Type `@` anywhere in the input to autocomplete files and folders relative to the current directory.
+File references like `/cmd @foo.py @src/bar.py` are passed to commands as `foo.py src/bar.py`.
 
 - `/help` — list available commands
 - `/exit` — exit the application
