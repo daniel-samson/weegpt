@@ -352,8 +352,9 @@ class WeeGPTApp(App):
         prompt = self.query_one("#prompt", Input)
         text = prompt.value
         if self._palette_mode == "command":
-            new_text = "/" + value + " " + text[self._token_end:]
-            new_cursor = len(value) + 2  # "/" + value + " "
+            # value already includes the leading "/" (e.g. "/view")
+            new_text = value + " " + text[self._token_end:]
+            new_cursor = len(value) + 1
         else:
             # file mode — preserve "@" prefix; append "/" if value was a dir,
             # otherwise a trailing space to move on to the next arg.
