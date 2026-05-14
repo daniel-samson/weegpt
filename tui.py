@@ -131,6 +131,48 @@ async def cmd_throbber(app: WeeGPTApp, args: str) -> None:
 
 
 @command(
+    "/speed",
+    help="Set the run speed multiplier (1.0 = normal, <1.0 = slower)",
+    args=...,
+)
+async def cmd_speed(app: WeeGPTApp, args: str) -> None:
+    log = app.query_one("#log", RichLog)
+    raw = args.strip()
+    if not raw:
+        log.write(f"speed = {app.settings.get('speed')}")
+        return
+    try:
+        value = float(raw)
+    except ValueError:
+        log.write(f"[red]Invalid speed:[/] {raw!r}. Expected a number.")
+        return
+    app.settings["speed"] = value
+    log.write(f"[green]speed[/] set to {value}")
+
+
+@command(
+    "/visualisation",
+    help="Toggle live visualisation: /visualisation on | off",
+    args=choices("on", "off"),
+)
+async def cmd_visualisation(app: WeeGPTApp, args: str) -> None:
+    log = app.query_one("#log", RichLog)
+    value = args.strip().lower()
+    if value in ("on", "true", "1"):
+        app.settings["visualisation"] = True
+    elif value in ("off", "false", "0"):
+        app.settings["visualisation"] = False
+    else:
+        log.write(
+            f"[red]Unknown value:[/] {args!r}. Use 'on' or 'off'."
+        )
+        return
+    log.write(
+        f"[green]visualisation[/] set to {app.settings['visualisation']}"
+    )
+
+
+@command(
     "/view",
     help="Switch view: /view log | /view inspector",
     args=choices("log", "inspector"),
@@ -333,6 +375,12 @@ class WeeGPTApp(App):
     def __init__(self, backend: Backend | None = None) -> None:
         super().__init__()
         self.backend: Backend = backend or StubBackend()
+        # Generic, decoupled key/value store the backend can read from.
+        # Commands like /speed and /visualisation write here.
+        self.settings: dict[str, object] = {
+            "speed": 1.0,
+            "visualisation": True,
+        }
         self._current_view: str = "log"
         self._command_history: list[str] = []
         self._history_index: int = -1

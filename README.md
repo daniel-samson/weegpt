@@ -32,7 +32,11 @@ Commands can also declare their own argument autocomplete (e.g. `/view ` shows `
 - `/clear` — clear the log view
 - `/view log|inspector` — switch views
 - `/throbber <message>` — show/update the highland cow throbber (no arg hides it)
+- `/speed <number>` — set run speed multiplier on `app.settings["speed"]`
+- `/visualisation on|off` — toggle `app.settings["visualisation"]`
 - `Up arrow` — recall previous commands
+
+`app.settings` is a generic dict the TUI exposes for backends to read; map it onto your `Config` in `weegpt.py`.
 
 ### Argument autocomplete
 
